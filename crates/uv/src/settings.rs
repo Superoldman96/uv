@@ -57,7 +57,7 @@ const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalSettings {
     pub(crate) required_version: Option<RequiredVersion>,
-    pub(crate) quiet: bool,
+    pub(crate) quiet: u8,
     pub(crate) verbose: u8,
     pub(crate) color: ColorChoice,
     pub(crate) network_settings: NetworkSettings,
@@ -1523,6 +1523,7 @@ pub(crate) struct ExportSettings {
     pub(crate) output_file: Option<PathBuf>,
     pub(crate) locked: bool,
     pub(crate) frozen: bool,
+    pub(crate) include_annotations: bool,
     pub(crate) include_header: bool,
     pub(crate) script: Option<PathBuf>,
     pub(crate) python: Option<String>,
@@ -1552,6 +1553,8 @@ impl ExportSettings {
             no_default_groups,
             only_group,
             all_groups,
+            annotate,
+            no_annotate,
             header,
             no_header,
             no_editable,
@@ -1604,6 +1607,7 @@ impl ExportSettings {
             output_file,
             locked,
             frozen,
+            include_annotations: flag(annotate, no_annotate).unwrap_or(true),
             include_header: flag(header, no_header).unwrap_or(true),
             script,
             python: python.and_then(Maybe::into_option),
