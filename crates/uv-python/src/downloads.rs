@@ -91,14 +91,12 @@ pub enum Error {
     NoDownloadFound(PythonDownloadRequest),
     #[error("A mirror was provided via `{0}`, but the URL does not match the expected format: {0}")]
     Mirror(&'static str, &'static str),
-    #[error(transparent)]
+    #[error("Failed to determine the libc used on the current platform")]
     LibcDetection(#[from] LibcDetectionError),
-    #[error(
-        "Remote python downloads JSON is not yet supported, please use a local path (without `file://` prefix)"
-    )]
-    RemoteJSONNotSupported(),
-    #[error("The json of the python downloads is invalid: {0}")]
-    InvalidPythonDownloadsJSON(String, #[source] serde_json::Error),
+    #[error("Remote Python downloads JSON is not yet supported, please use a local path")]
+    RemoteJSONNotSupported,
+    #[error("The JSON of the python downloads is invalid: {0}")]
+    InvalidPythonDownloadsJSON(PathBuf, #[source] serde_json::Error),
     #[error("An offline Python installation was requested, but {file} (from {url}) is missing in {}", python_builds_dir.user_display())]
     OfflinePythonMissing {
         file: Box<PythonInstallationKey>,
@@ -118,7 +116,7 @@ pub struct ManagedPythonDownload {
 pub struct PythonDownloadRequest {
     pub(crate) version: Option<VersionRequest>,
     pub(crate) implementation: Option<ImplementationName>,
-    pub(crate) arch: Option<Arch>,
+    pub(crate) arch: Option<ArchRequest>,
     pub(crate) os: Option<Os>,
     pub(crate) libc: Option<Libc>,
 
@@ -127,11 +125,40 @@ pub struct PythonDownloadRequest {
     pub(crate) prereleases: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchRequest {
+    Explicit(Arch),
+    Environment(Arch),
+}
+
+impl Display for ArchRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Explicit(arch) | Self::Environment(arch) => write!(f, "{arch}"),
+        }
+    }
+}
+
+impl ArchRequest {
+    pub(crate) fn satisfied_by(self, arch: Arch) -> bool {
+        match self {
+            Self::Explicit(request) => request == arch,
+            Self::Environment(env) => env.supports(arch),
+        }
+    }
+
+    pub fn inner(&self) -> Arch {
+        match self {
+            Self::Explicit(arch) | Self::Environment(arch) => *arch,
+        }
+    }
+}
+
 impl PythonDownloadRequest {
     pub fn new(
         version: Option<VersionRequest>,
         implementation: Option<ImplementationName>,
-        arch: Option<Arch>,
+        arch: Option<ArchRequest>,
         os: Option<Os>,
         libc: Option<Libc>,
         prereleases: Option<bool>,
@@ -160,7 +187,7 @@ impl PythonDownloadRequest {
 
     #[must_use]
     pub fn with_arch(mut self, arch: Arch) -> Self {
-        self.arch = Some(arch);
+        self.arch = Some(ArchRequest::Explicit(arch));
         self
     }
 
@@ -221,7 +248,7 @@ impl PythonDownloadRequest {
     /// Platform information is pulled from the environment.
     pub fn fill_platform(mut self) -> Result<Self, Error> {
         if self.arch.is_none() {
-            self.arch = Some(Arch::from_env());
+            self.arch = Some(ArchRequest::Environment(Arch::from_env()));
         }
         if self.os.is_none() {
             self.os = Some(Os::from_env());
@@ -240,18 +267,6 @@ impl PythonDownloadRequest {
         Ok(self)
     }
 
-    /// Construct a new [`PythonDownloadRequest`] with platform information from the environment.
-    pub fn from_env() -> Result<Self, Error> {
-        Ok(Self::new(
-            None,
-            None,
-            Some(Arch::from_env()),
-            Some(Os::from_env()),
-            Some(Libc::from_env()?),
-            None,
-        ))
-    }
-
     pub fn implementation(&self) -> Option<&ImplementationName> {
         self.implementation.as_ref()
     }
@@ -260,7 +275,7 @@ impl PythonDownloadRequest {
         self.version.as_ref()
     }
 
-    pub fn arch(&self) -> Option<&Arch> {
+    pub fn arch(&self) -> Option<&ArchRequest> {
         self.arch.as_ref()
     }
 
@@ -290,7 +305,7 @@ impl PythonDownloadRequest {
         }
 
         if let Some(arch) = &self.arch {
-            if !arch.supports(key.arch) {
+            if !arch.satisfied_by(key.arch) {
                 return false;
             }
         }
@@ -368,7 +383,7 @@ impl PythonDownloadRequest {
         }
         if let Some(arch) = self.arch() {
             let interpreter_arch = Arch::from(&interpreter.platform().arch());
-            if &interpreter_arch != arch {
+            if !arch.satisfied_by(interpreter_arch) {
                 debug!(
                     "Skipping interpreter at `{executable}`: architecture `{interpreter_arch}` does not match request `{arch}`"
                 );
@@ -410,7 +425,7 @@ impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
                     "Managed Python installations are expected to always have known implementation names, found {name}"
                 ),
             },
-            Some(key.arch),
+            Some(ArchRequest::Explicit(key.arch)),
             Some(key.os),
             Some(key.libc),
             Some(key.prerelease.is_some()),
@@ -480,7 +495,7 @@ impl FromStr for PythonDownloadRequest {
                     );
                 }
                 3 => os = Some(Os::from_str(part)?),
-                4 => arch = Some(Arch::from_str(part)?),
+                4 => arch = Some(ArchRequest::Explicit(Arch::from_str(part)?)),
                 5 => libc = Some(Libc::from_str(part)?),
                 _ => return Err(Error::TooManyParts(s.to_string())),
             }
@@ -559,20 +574,26 @@ impl ManagedPythonDownload {
             let json_downloads: HashMap<String, JsonPythonDownload> = if let Some(json_source) =
                 python_downloads_json_url
             {
-                if Url::parse(json_source).is_ok() {
-                    return Err(Error::RemoteJSONNotSupported());
-                }
-
-                let file = match fs_err::File::open(json_source) {
-                    Ok(file) => file,
-                    Err(e) => { Err(Error::Io(e)) }?,
+                // Windows paths are also valid URLs
+                let json_source = if let Ok(url) = Url::parse(json_source) {
+                    if let Ok(path) = url.to_file_path() {
+                        Cow::Owned(path)
+                    } else if matches!(url.scheme(), "http" | "https") {
+                        return Err(Error::RemoteJSONNotSupported);
+                    } else {
+                        Cow::Borrowed(Path::new(json_source))
+                    }
+                } else {
+                    Cow::Borrowed(Path::new(json_source))
                 };
 
+                let file = fs_err::File::open(json_source.as_ref())?;
+
                 serde_json::from_reader(file)
-                    .map_err(|e| Error::InvalidPythonDownloadsJSON(json_source.to_string(), e))?
+                    .map_err(|e| Error::InvalidPythonDownloadsJSON(json_source.to_path_buf(), e))?
             } else {
                 serde_json::from_str(BUILTIN_PYTHON_DOWNLOADS_JSON).map_err(|e| {
-                    Error::InvalidPythonDownloadsJSON("EMBEDDED IN THE BINARY".to_string(), e)
+                    Error::InvalidPythonDownloadsJSON(PathBuf::from("EMBEDDED IN THE BINARY"), e)
                 })?
             };
 
