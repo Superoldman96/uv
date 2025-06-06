@@ -45,6 +45,7 @@ use uv_static::EnvVars;
 use uv_torch::TorchMode;
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::DependencyType;
+use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::ToolRunCommand;
 use crate::commands::{InitKind, InitProjectKind, pip::operations::Modifications};
@@ -781,6 +782,7 @@ pub(crate) struct ToolListSettings {
     pub(crate) show_paths: bool,
     pub(crate) show_version_specifiers: bool,
     pub(crate) show_with: bool,
+    pub(crate) show_extras: bool,
 }
 
 impl ToolListSettings {
@@ -791,6 +793,7 @@ impl ToolListSettings {
             show_paths,
             show_version_specifiers,
             show_with,
+            show_extras,
             python_preference: _,
             no_python_downloads: _,
         } = args;
@@ -799,6 +802,7 @@ impl ToolListSettings {
             show_paths,
             show_version_specifiers,
             show_with,
+            show_extras,
         }
     }
 }
@@ -1052,6 +1056,7 @@ pub(crate) struct PythonPinSettings {
     pub(crate) resolved: bool,
     pub(crate) no_project: bool,
     pub(crate) global: bool,
+    pub(crate) rm: bool,
 }
 
 impl PythonPinSettings {
@@ -1064,6 +1069,7 @@ impl PythonPinSettings {
             resolved,
             no_project,
             global,
+            rm,
         } = args;
 
         Self {
@@ -1071,6 +1077,7 @@ impl PythonPinSettings {
             resolved: flag(resolved, no_resolved).unwrap_or(false),
             no_project,
             global,
+            rm,
         }
     }
 }
@@ -1261,6 +1268,7 @@ pub(crate) struct AddSettings {
     pub(crate) editable: Option<bool>,
     pub(crate) extras: Vec<ExtraName>,
     pub(crate) raw: bool,
+    pub(crate) bounds: Option<AddBoundsKind>,
     pub(crate) rev: Option<String>,
     pub(crate) tag: Option<String>,
     pub(crate) branch: Option<String>,
@@ -1289,6 +1297,7 @@ impl AddSettings {
             no_editable,
             extra,
             raw,
+            bounds,
             rev,
             tag,
             branch,
@@ -1370,9 +1379,11 @@ impl AddSettings {
         }
 
         let install_mirrors = filesystem
-            .clone()
+            .as_ref()
             .map(|fs| fs.install_mirrors.clone())
             .unwrap_or_default();
+
+        let bounds = bounds.or(filesystem.as_ref().and_then(|fs| fs.add.add_bounds));
 
         Self {
             locked,
@@ -1388,6 +1399,7 @@ impl AddSettings {
             marker,
             dependency_type,
             raw,
+            bounds,
             rev,
             tag,
             branch,

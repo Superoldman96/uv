@@ -22,6 +22,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{AnnotationStyle, ExcludeNewer, ForkStrategy, PrereleaseMode, ResolutionMode};
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
+use uv_workspace::pyproject_mut::AddBoundsKind;
 
 pub mod comma;
 pub mod compat;
@@ -835,10 +836,6 @@ pub enum ProjectCommand {
     /// If a given dependency exists already, it will be updated to the new version specifier unless
     /// it includes markers that differ from the existing specifier in which case another entry for
     /// the dependency will be added.
-    ///
-    /// If no constraint or URL is provided for a dependency, a lower bound is added equal to the
-    /// latest compatible version of the package, e.g., `>=1.2.3`, unless `--frozen` is provided, in
-    /// which case no resolution is performed.
     ///
     /// The lockfile and project environment will be updated to reflect the added dependencies. To
     /// skip updating the lockfile, use `--frozen`. To skip updating the environment, use
@@ -3562,6 +3559,19 @@ pub struct AddArgs {
     )]
     pub raw: bool,
 
+    /// The kind of version specifier to use when adding dependencies.
+    ///
+    /// When adding a dependency to the project, if no constraint or URL is provided, a constraint
+    /// is added based on the latest compatible version of the package. By default, a lower bound
+    /// constraint is used, e.g., `>=1.2.3`.
+    ///
+    /// When `--frozen` is provided, no resolution is performed, and dependencies are always added
+    /// without constraints.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[arg(long, value_enum)]
+    pub bounds: Option<AddBoundsKind>,
+
     /// Commit to use when adding a dependency from Git.
     #[arg(long, group = "git-ref", action = clap::ArgAction::Set)]
     pub rev: Option<String>,
@@ -4409,6 +4419,10 @@ pub struct ToolListArgs {
     #[arg(long)]
     pub show_with: bool,
 
+    /// Whether to display the extra requirements installed with each tool.
+    #[arg(long)]
+    pub show_extras: bool,
+
     // Hide unused global Python options.
     #[arg(long, hide = true)]
     pub python_preference: Option<PythonPreference>,
@@ -5018,6 +5032,10 @@ pub struct PythonPinArgs {
     /// directory, this version will be used instead.
     #[arg(long)]
     pub global: bool,
+
+    /// Remove the Python version pin.
+    #[arg(long, conflicts_with = "request", conflicts_with = "resolved")]
+    pub rm: bool,
 }
 
 #[derive(Args)]

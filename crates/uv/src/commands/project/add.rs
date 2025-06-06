@@ -26,7 +26,7 @@ use uv_distribution_types::{
     Index, IndexName, IndexUrls, NameRequirementSpecification, Requirement, RequirementSource,
     UnresolvedRequirement, VersionId,
 };
-use uv_fs::Simplified;
+use uv_fs::{LockedFile, Simplified};
 use uv_git::GIT_STORE;
 use uv_git_types::GitReference;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
@@ -41,7 +41,7 @@ use uv_settings::PythonInstallMirrors;
 use uv_types::{BuildIsolation, HashStrategy};
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::{DependencyType, Source, SourceError, Sources, ToolUvSources};
-use uv_workspace::pyproject_mut::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
+use uv_workspace::pyproject_mut::{AddBoundsKind, ArrayEdit, DependencyTarget, PyProjectTomlMut};
 use uv_workspace::{DiscoveryOptions, VirtualProject, Workspace, WorkspaceCache};
 
 use crate::commands::pip::loggers::{
@@ -74,6 +74,7 @@ pub(crate) async fn add(
     editable: Option<bool>,
     dependency_type: DependencyType,
     raw: bool,
+    bounds: Option<AddBoundsKind>,
     indexes: Vec<Index>,
     rev: Option<String>,
     tag: Option<String>,
@@ -94,6 +95,10 @@ pub(crate) async fn add(
     printer: Printer,
     preview: PreviewMode,
 ) -> Result<ExitStatus> {
+    if bounds.is_some() && preview.is_disabled() {
+        warn_user_once!("The bounds option is in preview and may change in any future release.");
+    }
+
     for source in &requirements {
         match source {
             RequirementsSource::PyprojectToml(_) => {
@@ -271,6 +276,8 @@ pub(crate) async fn add(
             AddTarget::Project(project, Box::new(PythonTarget::Environment(environment)))
         }
     };
+
+    let _lock = target.acquire_lock().await?;
 
     let client_builder = BaseClientBuilder::new()
         .connectivity(network_settings.connectivity)
@@ -533,6 +540,7 @@ pub(crate) async fn add(
         locked,
         &dependency_type,
         raw,
+        bounds,
         constraints,
         &settings,
         &network_settings,
@@ -759,6 +767,7 @@ async fn lock_and_sync(
     locked: bool,
     dependency_type: &DependencyType,
     raw: bool,
+    bound_kind: Option<AddBoundsKind>,
     constraints: Vec<NameRequirementSpecification>,
     settings: &ResolverInstallerSettings,
     network_settings: &NetworkSettings,
@@ -834,6 +843,15 @@ async fn lock_and_sync(
                 None => true,
             };
             if !is_empty {
+                if let Some(bound_kind) = bound_kind {
+                    writeln!(
+                        printer.stderr(),
+                        "{} Using explicit requirement `{}` over bounds preference `{}`",
+                        "note:".bold(),
+                        edit.requirement,
+                        bound_kind
+                    )?;
+                }
                 continue;
             }
 
@@ -846,7 +864,12 @@ async fn lock_and_sync(
             // For example, convert `1.2.3+local` to `1.2.3`.
             let minimum = (*minimum).clone().without_local();
 
-            toml.set_dependency_minimum_version(&edit.dependency_type, *index, minimum)?;
+            toml.set_dependency_bound(
+                &edit.dependency_type,
+                *index,
+                minimum,
+                bound_kind.unwrap_or_default(),
+            )?;
 
             modified = true;
         }
@@ -1131,6 +1154,15 @@ impl<'lock> From<&'lock AddTarget> for LockTarget<'lock> {
 }
 
 impl AddTarget {
+    /// Acquire a file lock mapped to the underlying interpreter to prevent concurrent
+    /// modifications.
+    pub(super) async fn acquire_lock(&self) -> Result<LockedFile, io::Error> {
+        match self {
+            Self::Script(_, interpreter) => interpreter.lock().await,
+            Self::Project(_, python_target) => python_target.interpreter().lock().await,
+        }
+    }
+
     /// Returns the [`Interpreter`] for the target.
     pub(super) fn interpreter(&self) -> &Interpreter {
         match self {

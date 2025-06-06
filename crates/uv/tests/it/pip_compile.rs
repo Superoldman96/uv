@@ -6961,7 +6961,7 @@ fn invalid_metadata_requires_python() -> Result<()> {
       ╰─▶ Because validation==2.0.0 has invalid metadata and you require validation==2.0.0, we can conclude that your requirements are unsatisfiable.
 
           hint: Metadata for `validation` (v2.0.0) could not be parsed:
-            Failed to parse version: Unexpected end of version specifier, expected operator:
+            Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==12`?:
             12
             ^^
     "###
@@ -14048,16 +14048,16 @@ fn compile_enumerate_no_versions() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in"),
-    @r###"
+    @r"
     success: false
     exit_code: 1
     ----- stdout -----
 
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because the current Python version (3.10.[X]) does not satisfy Python>=3.11,<4.0 and rooster-blue<=0.0.8 depends on Python>=3.11,<4.0, we can conclude that rooster-blue<=0.0.8 cannot be used.
+      ╰─▶ Because the current Python version (3.10.[X]) does not satisfy Python>=3.11,<4.0 and all versions of rooster-blue depend on Python>=3.11,<4.0, we can conclude that all versions of rooster-blue cannot be used.
           And because you require rooster-blue, we can conclude that your requirements are unsatisfiable.
-    "###);
+    ");
 
     Ok(())
 }
@@ -14497,7 +14497,7 @@ fn unsupported_requires_python_dynamic_metadata() -> Result<()> {
     uv_snapshot!(context.filters(), context
         .pip_compile()
         .arg("--universal")
-        .arg("requirements.in"), @r###"
+        .arg("requirements.in"), @r"
     success: false
     exit_code: 1
     ----- stdout -----
@@ -14507,7 +14507,9 @@ fn unsupported_requires_python_dynamic_metadata() -> Result<()> {
       ╰─▶ Because source-distribution==0.0.3 requires Python >=3.10 and you require source-distribution{python_full_version >= '3.10'}==0.0.3, we can conclude that your requirements are unsatisfiable.
 
           hint: The source distribution for `source-distribution` (v0.0.3) does not include static metadata. Generating metadata for this package requires Python >=3.10, but Python 3.8.[X] is installed.
-    "###);
+
+          hint: While the active Python version is 3.8, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
 
     Ok(())
 }
@@ -14816,20 +14818,37 @@ fn invalid_platform() -> Result<()> {
         .pip_compile()
         .arg("--python-platform")
         .arg("linux")
-        .arg("requirements.in"), @r###"
+        .arg("requirements.in"), @r"
     success: false
     exit_code: 1
     ----- stdout -----
 
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only open3d<=0.18.0 is available and open3d<=0.15.2 has no wheels with a matching Python ABI tag (e.g., `cp310`), we can conclude that open3d<=0.15.2 cannot be used.
-          And because open3d>=0.16.0,<=0.18.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and you require open3d, we can conclude that your requirements are unsatisfiable.
+      ╰─▶ Because only the following versions of open3d are available:
+              open3d==0.8.0.0
+              open3d==0.9.0.0
+              open3d==0.10.0.0
+              open3d==0.10.0.1
+              open3d==0.11.0
+              open3d==0.11.1
+              open3d==0.11.2
+              open3d==0.12.0
+              open3d==0.13.0
+              open3d==0.14.1
+              open3d==0.15.1
+              open3d==0.15.2
+              open3d==0.16.0
+              open3d==0.16.1
+              open3d==0.17.0
+              open3d==0.18.0
+          and open3d<=0.15.2 has no wheels with a matching Python ABI tag (e.g., `cp310`), we can conclude that open3d<=0.15.2 cannot be used.
+          And because open3d>=0.16.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and you require open3d, we can conclude that your requirements are unsatisfiable.
 
           hint: You require CPython 3.10 (`cp310`), but we only found wheels for `open3d` (v0.15.2) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`
 
           hint: Wheels are available for `open3d` (v0.18.0) on the following platforms: `manylinux_2_27_aarch64`, `manylinux_2_27_x86_64`, `macosx_11_0_x86_64`, `macosx_13_0_arm64`, `win_amd64`
-    "###);
+    ");
 
     Ok(())
 }

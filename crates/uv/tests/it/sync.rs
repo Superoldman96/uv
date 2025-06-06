@@ -7767,9 +7767,8 @@ fn find_links_relative_in_config_works_from_subdir() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "python-managed")]
 fn sync_dry_run() -> Result<()> {
-    let context = TestContext::new_with_versions(&["3.8", "3.12"]);
+    let context = TestContext::new_with_versions(&["3.9", "3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7846,7 +7845,7 @@ fn sync_dry_run() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = "==3.8.*"
+        requires-python = "==3.9.*"
         dependencies = ["iniconfig"]
         "#,
     )?;
@@ -7857,7 +7856,7 @@ fn sync_dry_run() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.8.[X] interpreter at: [PYTHON-3.8]
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Would replace existing virtual environment at: .venv
     Resolved 2 packages in [TIME]
     Would update lockfile at: uv.lock
@@ -7872,7 +7871,7 @@ fn sync_dry_run() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.8.[X] interpreter at: [PYTHON-3.8]
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
@@ -8000,7 +7999,7 @@ fn sync_dry_run_and_frozen() -> Result<()> {
 
 #[test]
 fn sync_script() -> Result<()> {
-    let context = TestContext::new_with_versions(&["3.8", "3.12"]);
+    let context = TestContext::new_with_versions(&["3.9", "3.12"]);
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
@@ -8150,7 +8149,7 @@ fn sync_script() -> Result<()> {
 
 #[test]
 fn sync_locked_script() -> Result<()> {
-    let context = TestContext::new_with_versions(&["3.8", "3.12"]);
+    let context = TestContext::new_with_versions(&["3.9", "3.12"]);
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
@@ -9568,6 +9567,111 @@ fn repeated_dev_member_all_packages() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     Audited 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Test that hash checking doesn't fail with dependency metadata.
+#[test]
+fn direct_url_dependency_metadata() -> Result<()> {
+    let context = TestContext::new("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(r#"
+        [project]
+        name = "debug"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+        dependencies = [
+            "tqdm",
+        ]
+
+        [tool.uv]
+        dependency-metadata = [
+          { name = "tqdm", version = "4.67.1", requires-dist = [] },
+        ]
+
+        [tool.uv.sources]
+        tqdm = { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl" }
+        "#
+    )?;
+
+    uv_snapshot!(context.sync(), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==4.67.1 (from https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl)
+    ");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_required_environment_hint() -> Result<()> {
+    let context = TestContext::new("3.13");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.13.2"
+        dependencies = ["wheel_tag_test"]
+        "#,
+    )?;
+
+    // Populate the `--find-links` entries.
+    fs_err::create_dir_all(context.temp_dir.join("links"))?;
+
+    for entry in fs_err::read_dir(context.workspace_root.join("scripts/links"))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .is_some_and(|file_name| file_name.starts_with("wheel_tag_test-"))
+        {
+            let dest = context
+                .temp_dir
+                .join("links")
+                .join(path.file_name().unwrap());
+            fs_err::copy(&path, &dest)?;
+        }
+    }
+
+    uv_snapshot!(context.filters(), context.lock()
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(context.temp_dir.join("links")), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let mut filters = context.filters();
+    filters.push((r"(macOS|Linux) \(`.*`\)", "[PLATFORM] (`[TAG]`)"));
+
+    uv_snapshot!(filters, context.sync()
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(context.temp_dir.join("links")), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Distribution `wheel-tag-test==0.1.0 @ registry+links` can't be installed because it doesn't have a source distribution or wheel for the current platform
+
+    hint: You're on [PLATFORM] (`[TAG]`), but `wheel-tag-test` (v0.1.0) only has wheels for the following platform: `win_amd64`; consider adding your platform to `tool.uv.required-environments` to ensure uv resolves to a version with compatible wheels
     ");
 
     Ok(())

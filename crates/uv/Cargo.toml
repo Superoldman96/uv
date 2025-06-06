@@ -1,6 +1,6 @@
 [package]
 name = "uv"
-version = "0.7.8"
+version = "0.7.12"
 edition = { workspace = true }
 rust-version = { workspace = true }
 homepage = { workspace = true }
@@ -58,7 +58,7 @@ uv-types = { workspace = true }
 uv-version = { workspace = true }
 uv-virtualenv = { workspace = true }
 uv-warnings = { workspace = true }
-uv-workspace = { workspace = true }
+uv-workspace = { workspace = true, features = ["clap"] }
 
 anstream = { workspace = true }
 anyhow = { workspace = true }
@@ -124,6 +124,7 @@ reqwest = { workspace = true, features = ["blocking"], default-features = false 
 similar = { version = "2.6.0" }
 tar = { workspace = true }
 tempfile = { workspace = true }
+whoami = { version = "1.6.0" }
 wiremock = { workspace = true }
 zip = { workspace = true }
 
@@ -178,6 +179,12 @@ python-managed = []
 slow-tests = []
 # Includes test cases that require ecosystem packages
 test-ecosystem = []
+# Build uvw binary on Windows
+windows-gui-bin = []
 
 [package.metadata.dist]
 dist = true
+
+[[bin]]
+name = "uvw"
+required-features = ["windows-gui-bin"]
