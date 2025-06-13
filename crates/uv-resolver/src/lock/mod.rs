@@ -29,8 +29,8 @@ use uv_distribution_types::{
     BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist,
     Dist, DistributionMetadata, FileLocation, GitSourceDist, IndexLocations, IndexMetadata,
     IndexUrl, Name, PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel,
-    RegistrySourceDist, RemoteSource, Requirement, RequirementSource, ResolvedDist, StaticMetadata,
-    ToUrlError, UrlString,
+    RegistrySourceDist, RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePath, PortablePathBuf, relative_to};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -57,12 +57,10 @@ pub use crate::lock::export::{PylockToml, PylockTomlErrorKind};
 pub use crate::lock::installable::Installable;
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::TreeDisplay;
-use crate::requires_python::SimplifiedMarkerTree;
 use crate::resolution::{AnnotatedDist, ResolutionGraphNode};
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 use crate::{
-    ExcludeNewer, InMemoryIndex, MetadataResponse, PrereleaseMode, RequiresPython, ResolutionMode,
-    ResolverOutput,
+    ExcludeNewer, InMemoryIndex, MetadataResponse, PrereleaseMode, ResolutionMode, ResolverOutput,
 };
 
 mod export;
@@ -5084,32 +5082,23 @@ impl std::fmt::Display for WheelTagHint {
                     } else {
                         format!("`{}`", best.cyan())
                     };
-                    if let Some(version) = version {
-                        write!(
-                            f,
-                            "{}{} You're on {}, but `{}` ({}) only has wheels for the following platform{s}: {}",
-                            "hint".bold().cyan(),
-                            ":".bold(),
-                            best,
-                            package.cyan(),
-                            format!("v{version}").cyan(),
-                            tags.iter()
-                                .map(|tag| format!("`{}`", tag.cyan()))
-                                .join(", "),
-                        )
+                    let package_ref = if let Some(version) = version {
+                        format!("`{}` ({})", package.cyan(), format!("v{version}").cyan())
                     } else {
-                        write!(
-                            f,
-                            "{}{} You're on {}, but `{}` only has wheels for the following platform{s}: {}",
-                            "hint".bold().cyan(),
-                            ":".bold(),
-                            best,
-                            package.cyan(),
-                            tags.iter()
-                                .map(|tag| format!("`{}`", tag.cyan()))
-                                .join(", "),
-                        )
-                    }
+                        format!("`{}`", package.cyan())
+                    };
+                    writeln!(
+                        f,
+                        "{}{} You're on {}, but {} only has wheels for the following platform{s}: {}; consider adding your platform to `{}` to ensure uv resolves to a version with compatible wheels",
+                        "hint".bold().cyan(),
+                        ":".bold(),
+                        best,
+                        package_ref,
+                        tags.iter()
+                            .map(|tag| format!("`{}`", tag.cyan()))
+                            .join(", "),
+                        "tool.uv.required-environments".green()
+                    )
                 } else {
                     if let Some(version) = version {
                         write!(

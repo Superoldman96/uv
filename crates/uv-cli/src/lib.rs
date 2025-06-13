@@ -22,6 +22,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{AnnotationStyle, ExcludeNewer, ForkStrategy, PrereleaseMode, ResolutionMode};
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
+use uv_workspace::pyproject_mut::AddBoundsKind;
 
 pub mod comma;
 pub mod compat;
@@ -836,10 +837,6 @@ pub enum ProjectCommand {
     /// it includes markers that differ from the existing specifier in which case another entry for
     /// the dependency will be added.
     ///
-    /// If no constraint or URL is provided for a dependency, a lower bound is added equal to the
-    /// latest compatible version of the package, e.g., `>=1.2.3`, unless `--frozen` is provided, in
-    /// which case no resolution is performed.
-    ///
     /// The lockfile and project environment will be updated to reflect the added dependencies. To
     /// skip updating the lockfile, use `--frozen`. To skip updating the environment, use
     /// `--no-sync`.
@@ -1494,7 +1491,7 @@ pub struct PipSyncArgs {
     /// Hash-checking mode introduces a number of additional constraints:
     ///
     /// - Git dependencies are not supported.
-    /// - Editable installs are not supported.
+    /// - Editable installations are not supported.
     /// - Local dependencies are not supported, unless they point to a specific wheel (`.whl`) or
     ///   source archive (`.zip`, `.tar.gz`), as opposed to a directory.
     #[arg(
@@ -1804,7 +1801,7 @@ pub struct PipInstallArgs {
     /// Hash-checking mode introduces a number of additional constraints:
     ///
     /// - Git dependencies are not supported.
-    /// - Editable installs are not supported.
+    /// - Editable installations are not supported.
     /// - Local dependencies are not supported, unless they point to a specific wheel (`.whl`) or
     ///   source archive (`.zip`, `.tar.gz`), as opposed to a directory.
     #[arg(
@@ -2474,7 +2471,7 @@ pub struct BuildArgs {
     /// Hash-checking mode introduces a number of additional constraints:
     ///
     /// - Git dependencies are not supported.
-    /// - Editable installs are not supported.
+    /// - Editable installations are not supported.
     /// - Local dependencies are not supported, unless they point to a specific wheel (`.whl`) or
     ///   source archive (`.zip`, `.tar.gz`), as opposed to a directory.
     #[arg(
@@ -3519,7 +3516,12 @@ pub struct AddArgs {
     /// Add the requirements to the development dependency group.
     ///
     /// This option is an alias for `--group dev`.
-    #[arg(long, conflicts_with("optional"), conflicts_with("group"))]
+    #[arg(
+        long,
+        conflicts_with("optional"),
+        conflicts_with("group"),
+        conflicts_with("script")
+    )]
     pub dev: bool,
 
     /// Add the requirements to the package's optional dependencies for the specified extra.
@@ -3533,7 +3535,12 @@ pub struct AddArgs {
     /// Add the requirements to the specified dependency group.
     ///
     /// These requirements will not be included in the published metadata for the project.
-    #[arg(long, conflicts_with("dev"), conflicts_with("optional"))]
+    #[arg(
+        long,
+        conflicts_with("dev"),
+        conflicts_with("optional"),
+        conflicts_with("script")
+    )]
     pub group: Option<GroupName>,
 
     /// Add the requirements as editable.
@@ -3561,6 +3568,19 @@ pub struct AddArgs {
         alias = "raw-sources"
     )]
     pub raw: bool,
+
+    /// The kind of version specifier to use when adding dependencies.
+    ///
+    /// When adding a dependency to the project, if no constraint or URL is provided, a constraint
+    /// is added based on the latest compatible version of the package. By default, a lower bound
+    /// constraint is used, e.g., `>=1.2.3`.
+    ///
+    /// When `--frozen` is provided, no resolution is performed, and dependencies are always added
+    /// without constraints.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[arg(long, value_enum)]
+    pub bounds: Option<AddBoundsKind>,
 
     /// Commit to use when adding a dependency from Git.
     #[arg(long, group = "git-ref", action = clap::ArgAction::Set)]
@@ -3667,11 +3687,21 @@ pub struct RemoveArgs {
     pub dev: bool,
 
     /// Remove the packages from the project's optional dependencies for the specified extra.
-    #[arg(long, conflicts_with("dev"), conflicts_with("group"))]
+    #[arg(
+        long,
+        conflicts_with("dev"),
+        conflicts_with("group"),
+        conflicts_with("script")
+    )]
     pub optional: Option<ExtraName>,
 
     /// Remove the packages from the specified dependency group.
-    #[arg(long, conflicts_with("dev"), conflicts_with("optional"))]
+    #[arg(
+        long,
+        conflicts_with("dev"),
+        conflicts_with("optional"),
+        conflicts_with("script")
+    )]
     pub group: Option<GroupName>,
 
     /// Avoid syncing the virtual environment after re-locking the project.
@@ -4409,6 +4439,10 @@ pub struct ToolListArgs {
     #[arg(long)]
     pub show_with: bool,
 
+    /// Whether to display the extra requirements installed with each tool.
+    #[arg(long)]
+    pub show_extras: bool,
+
     // Hide unused global Python options.
     #[arg(long, hide = true)]
     pub python_preference: Option<PythonPreference>,
@@ -4714,7 +4748,8 @@ pub enum PythonCommand {
     ///
     /// A `python` executable is not made globally available, managed Python versions are only used
     /// in uv commands or in active virtual environments. There is experimental support for adding
-    /// Python executables to the `PATH` — use the `--preview` flag to enable this behavior.
+    /// Python executables to a directory on the path — use the `--preview` flag to enable this
+    /// behavior and `uv python dir --bin` to retrieve the target directory.
     ///
     /// Multiple Python versions may be requested.
     ///
@@ -4749,7 +4784,8 @@ pub enum PythonCommand {
     /// The Python installation directory may be overridden with `$UV_PYTHON_INSTALL_DIR`.
     ///
     /// To view the directory where uv installs Python executables instead, use the `--bin` flag.
-    /// Note that Python executables are only installed when preview mode is enabled.
+    /// The Python executable directory may be overridden with `$UV_PYTHON_BIN_DIR`. Note that
+    /// Python executables are only installed when preview mode is enabled.
     Dir(PythonDirArgs),
 
     /// Uninstall Python versions.
@@ -5018,6 +5054,10 @@ pub struct PythonPinArgs {
     /// directory, this version will be used instead.
     #[arg(long)]
     pub global: bool,
+
+    /// Remove the Python version pin.
+    #[arg(long, conflicts_with = "request", conflicts_with = "resolved")]
+    pub rm: bool,
 }
 
 #[derive(Args)]
