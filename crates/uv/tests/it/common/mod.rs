@@ -22,6 +22,7 @@ use regex::Regex;
 
 use tokio::io::AsyncWriteExt;
 use uv_cache::Cache;
+use uv_configuration::PreviewMode;
 use uv_fs::Simplified;
 use uv_python::managed::ManagedPythonInstallations;
 use uv_python::{
@@ -32,7 +33,7 @@ use uv_static::EnvVars;
 // Exclude any packages uploaded after this date.
 static EXCLUDE_NEWER: &str = "2024-03-25T00:00:00Z";
 
-pub const PACKSE_VERSION: &str = "0.3.46";
+pub const PACKSE_VERSION: &str = "0.3.47";
 pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
 
 /// Using a find links url allows using `--index-url` instead of `--extra-index-url` in tests
@@ -650,6 +651,8 @@ impl TestContext {
             format!("https://raw.githubusercontent.com/astral-sh/packse/{PACKSE_VERSION}/"),
             "https://raw.githubusercontent.com/astral-sh/packse/PACKSE_VERSION/".to_string(),
         ));
+        // For wiremock tests
+        filters.push((r"127\.0\.0\.1:\d*".to_string(), "[LOCALHOST]".to_string()));
 
         Self {
             root: ChildPath::new(root.path()),
@@ -745,6 +748,7 @@ impl TestContext {
             .env_remove(EnvVars::UV_CACHE_DIR)
             .env_remove(EnvVars::UV_TOOL_BIN_DIR)
             .env_remove(EnvVars::XDG_CONFIG_HOME)
+            .env_remove(EnvVars::XDG_DATA_HOME)
             .current_dir(self.temp_dir.path());
 
         for (key, value) in &self.extra_env {
@@ -956,6 +960,14 @@ impl TestContext {
         command
     }
 
+    /// Create a `uv python upgrade` command with options shared across scenarios.
+    pub fn python_upgrade(&self) -> Command {
+        let mut command = self.new_command();
+        self.add_shared_options(&mut command, true);
+        command.arg("python").arg("upgrade");
+        command
+    }
+
     /// Create a `uv python pin` command with options shared across scenarios.
     pub fn python_pin(&self) -> Command {
         let mut command = self.new_command();
@@ -1082,15 +1094,30 @@ impl TestContext {
     }
 
     pub fn interpreter(&self) -> PathBuf {
-        venv_to_interpreter(&self.venv)
+        let venv = &self.venv;
+        if cfg!(unix) {
+            venv.join("bin").join("python")
+        } else if cfg!(windows) {
+            venv.join("Scripts").join("python.exe")
+        } else {
+            unimplemented!("Only Windows and Unix are supported")
+        }
+    }
+
+    pub fn python_command(&self) -> Command {
+        let mut command = self.new_command_with(&self.interpreter());
+        command
+            // Our tests change files in <1s, so we must disable CPython bytecode caching or we'll get stale files
+            // https://github.com/python/cpython/issues/75953
+            .arg("-B")
+            // Python on windows
+            .env(EnvVars::PYTHONUTF8, "1");
+        command
     }
 
     /// Run the given python code and check whether it succeeds.
     pub fn assert_command(&self, command: &str) -> Assert {
-        self.new_command_with(&venv_to_interpreter(&self.venv))
-            // Our tests change files in <1s, so we must disable CPython bytecode caching or we'll get stale files
-            // https://github.com/python/cpython/issues/75953
-            .arg("-B")
+        self.python_command()
             .arg("-c")
             .arg(command)
             .current_dir(&self.temp_dir)
@@ -1099,10 +1126,7 @@ impl TestContext {
 
     /// Run the given python file and check whether it succeeds.
     pub fn assert_file(&self, file: impl AsRef<Path>) -> Assert {
-        self.new_command_with(&venv_to_interpreter(&self.venv))
-            // Our tests change files in <1s, so we must disable CPython bytecode caching or we'll get stale files
-            // https://github.com/python/cpython/issues/75953
-            .arg("-B")
+        self.python_command()
             .arg(file.as_ref())
             .current_dir(&self.temp_dir)
             .assert()
@@ -1115,6 +1139,12 @@ impl TestContext {
         )
         .success()
         .stdout(version);
+    }
+
+    /// Assert a package is not installed.
+    pub fn assert_not_installed(&self, package: &'static str) {
+        self.assert_command(format!("import {package}").as_str())
+            .failure();
     }
 
     /// Generate various escaped regex patterns for the given path.
@@ -1344,16 +1374,6 @@ pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
     }
 }
 
-pub fn venv_to_interpreter(venv: &Path) -> PathBuf {
-    if cfg!(unix) {
-        venv.join("bin").join("python")
-    } else if cfg!(windows) {
-        venv.join("Scripts").join("python.exe")
-    } else {
-        unimplemented!("Only Windows and Unix are supported")
-    }
-}
-
 /// Get the path to the python interpreter for a specific python version.
 pub fn get_python(version: &PythonVersion) -> PathBuf {
     ManagedPythonInstallations::from_settings(None)
@@ -1423,6 +1443,7 @@ pub fn python_installations_for_versions(
                 EnvironmentPreference::OnlySystem,
                 PythonPreference::Managed,
                 &cache,
+                PreviewMode::Disabled,
             ) {
                 python.into_interpreter().sys_executable().to_owned()
             } else {
@@ -1626,6 +1647,8 @@ pub const READ_ONLY_GITHUB_TOKEN_2: &[&str] = &[
     "SHIzUG1tRVZRSHMzQTl2a3NiVnB4Tmk0eTR3R2JVYklLck1qY05naHhMSFVMTDZGVElIMXNYeFhYN2gK",
 ];
 
+pub const READ_ONLY_GITHUB_SSH_DEPLOY_KEY: &str = "LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGJuTnphQzFyWlhrdGRqRUFBQUFBQkc1dmJtVUFBQUFFYm05dVpRQUFBQUFBQUFBQkFBQUFNd0FBQUF0emMyZ3RaVwpReU5UVXhPUUFBQUNBeTF1SnNZK1JXcWp1NkdIY3Z6a3AwS21yWDEwdmo3RUZqTkpNTkRqSGZPZ0FBQUpqWUpwVnAyQ2FWCmFRQUFBQXR6YzJndFpXUXlOVFV4T1FBQUFDQXkxdUpzWStSV3FqdTZHSGN2emtwMEttclgxMHZqN0VGak5KTU5EakhmT2cKQUFBRUMwbzBnd1BxbGl6TFBJOEFXWDVaS2dVZHJyQ2ptMDhIQm9FenB4VDg3MXBqTFc0bXhqNUZhcU83b1lkeS9PU25RcQphdGZYUytQc1FXTTBrdzBPTWQ4NkFBQUFFR3R2Ym5OMGFVQmhjM1J5WVd3dWMyZ0JBZ01FQlE9PQotLS0tLUVORCBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0K";
+
 /// Decode a split, base64 encoded authentication token.
 /// We split and encode the token to bypass revoke by GitHub's secret scanning
 pub fn decode_token(content: &[&str]) -> String {
@@ -1655,9 +1678,9 @@ pub async fn download_to_disk(url: &str, path: &Path) {
         .allow_insecure_host(trusted_hosts)
         .build();
     let url = url.parse().unwrap();
-    let client = client.for_host(&url);
     let response = client
-        .request(http::Method::GET, reqwest::Url::from(url))
+        .for_host(&url)
+        .get(reqwest::Url::from(url))
         .send()
         .await
         .unwrap();
